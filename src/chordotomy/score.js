@@ -9,10 +9,16 @@ window.ScoreUI = (() => {
     const data = await r.json(); if (!r.ok) throw Error(data.error || '请求失败'); return data;
   }
   function name(label) {
-    if (!label || label === 'N') return label === 'N' ? 'N.C.' : '';
+    if (!label || label === 'N') return label === 'N' ? 'N' : '';
     const [r,q] = label.split(':');
     const suffix = {maj:'', min:'m', maj7:'maj7', min7:'m7', min6:'m6', hdim7:'ø7', dim7:'°7', dim:'°', aug:'+', 'sus4(b7)':'7sus4','maj(9)':'add9','min(9)':'madd9'};
     return r + (suffix[q] ?? q);
+  }
+  // Compare original beat data, including across bar and page boundaries.
+  // Unknown beats break a run; slash-bass changes start a new symbol.
+  function isContinuation(cells, i) {
+    const c=cells[i], prev=cells[i-1];
+    return Boolean(c?.chord && prev?.chord === c.chord && (prev.bass || null) === (c.bass || null));
   }
   function describe(c) {
     if (!c.numeral) return '';
@@ -34,7 +40,7 @@ window.ScoreUI = (() => {
     $('scoreSummary').textContent = `${score.bpm ?? '　'} BPM · ${score.meter ?? '拍号待定'} · ${score.key || score.global_key?.label || '调性待解析'}${score.global_key?.source==='estimated'?'（估计）':''}`;
     $('analysisStatus').textContent=score.analysis_status==='complete'?'级数与功能已补全':'级数与功能待解析';
     $('analyzeScore').disabled=busy() || !configured;
-    $('scoreMessage').textContent=configured?'': '请填写速度和拍号以建立小节；空拍表示尚无可靠结果，可点击逐拍填入。';
+    $('scoreMessage').textContent=configured?'连续相同和弦仅标起点；N 表示无可确认和弦，未解析位置留空。': '请填写速度和拍号以建立小节，可点击逐拍填入。';
     $('scoreExport').disabled=!score.cells.length;
     const fragment=document.createDocumentFragment();
     for(let bar=page*16; bar<Math.min(bars,page*16+16); bar++) {
@@ -46,8 +52,9 @@ window.ScoreUI = (() => {
         cell.type='button'; cell.disabled=!configured || i>=score.limit;
         cell.setAttribute('aria-label',`第 ${bar+1} 小节第 ${beat+1} 拍 ${name(c.chord)||'空白'}`);
         cell.title=c.key?`调性：${c.key}；${c.source==='manual'?'手动填写':'实时预览'}`:'点击填写或修改和弦';
-        const region=score.key_regions.find(r=>r.start_beat===i&&i>0);const explanation=region?`调性区域 → ${region.label} · ${describe(c)}`:describe(c);
-        cell.append(node('span','functional-note',explanation),node('span','degree',c.numeral||''),node('span','score-chord',name(c.chord)+(c.bass?'/'+c.bass:'')),node('span','beat-number',String(beat+1)+(c.source==='manual'?' · 手动':'')));
+        const continuation=isContinuation(score.cells,i);
+        const region=score.key_regions.find(r=>r.start_beat===i&&i>0);const explanation=region?`调性区域 → ${region.label} · ${describe(c)}`:(continuation?'':describe(c));
+        cell.append(node('span','functional-note',explanation),node('span','degree',continuation?'':(c.numeral||'')),node('span','score-chord',continuation?'':name(c.chord)+(c.bass?'/'+c.bass:'')),node('span','beat-number',String(beat+1)+(c.source==='manual'?' · 手动':'')));
         cell.onclick=()=>openCell(i,c,bar,beat); beats.append(cell);
       }
       box.append(beats);fragment.append(box);
@@ -86,5 +93,5 @@ window.ScoreUI = (() => {
     $('analyzeScore').onclick=async()=>{try{score=await request('/api/score/analyze',{});revision=score.revision;render();}catch(e){showError(e);}};
     $('scoreExport').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(score,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='harmonic-atlas-score-'+Date.now()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
   }
-  return {init,sync,name,describe};
+  return {init,sync,name,describe,isContinuation};
 })();

@@ -139,7 +139,7 @@ class Score:
         )
         if end <= start:
             return
-        chord = event["chord"] if event["chord"] != "N" else None
+        chord = event["chord"]
         low = max(0, math.floor((start - self.offset) / step))
         high = min(MAX_BEATS, math.ceil((end - self.offset) / step))
         for beat in range(low, high):

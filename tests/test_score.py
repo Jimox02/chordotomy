@@ -124,3 +124,17 @@ def test_supported_chord_parser_preserves_bass_rejects_lossy_extensions():
         parse_chord("C13")
     with pytest.raises(ValueError):
         parse_chord("hello")
+
+
+def test_live_n_is_preserved_in_chart_and_export():
+    s = Score()
+    configure(s)
+    for end in (1.1, 1.2, 1.3, 1.4, 1.5):
+        s.add(event(end, chord="N"))
+    assert s.cell(2)["chord"] == "N"
+    assert s.cell(2)["source"] == "live"
+    assert s.snapshot()["cells"][0]["chord"] is None
+    s.edit(3, "N")
+    assert s.snapshot()["cells"][3]["chord"] == "N"
+    s.analyze()
+    assert "numeral" not in s.cell(2)
