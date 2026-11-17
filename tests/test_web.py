@@ -102,3 +102,27 @@ def test_web_engine_selection_validation(server, monkeypatch):
     assert requested == ["model"]
     assert session.snapshot()["engine"] == "model"
     assert session.snapshot()["error"] == "model missing"
+
+
+def test_score_configuration_edit_analysis_and_script(server):
+    http, session = server
+    assert request(http, "GET", "/score.js")[0] == 200
+    status, body = request(http, "GET", "/api/score")
+    assert status == 200 and json.loads(body)["bpm"] is None
+    assert (
+        request(
+            http, "POST", "/api/score/config", dict(bpm=120, meter="4/4", offset=0, key="C:maj")
+        )[0]
+        == 200
+    )
+    for beat, chord in enumerate(["C", "D7", "G", "Fm"]):
+        assert request(http, "POST", "/api/score/edit", dict(beat=beat, chord=chord))[0] == 200
+    score = json.loads(request(http, "GET", "/api/score")[1])
+    assert score["cells"][1]["numeral"] == "V7/V"
+    assert score["cells"][3]["role"] == "borrowed"
+    assert request(http, "POST", "/api/start", dict(demo=True))[0] == 200
+    assert request(http, "POST", "/api/score/analyze", {})[0] == 400
+    assert (
+        request(http, "POST", "/api/score/config", dict(bpm=-2, meter="4/4", offset=0, key=None))[0]
+        == 400
+    )

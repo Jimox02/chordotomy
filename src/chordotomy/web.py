@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import numpy as np
 
 from .realtime import BLOCK, RATE, Capture, coalesce_blocks, make_detector, speakers
+from .score import Score
 
 
 class Session:
@@ -27,6 +28,7 @@ class Session:
         self.dropped = 0
         self.sequence = 0
         self.engine = "dsp"
+        self.score = Score()
 
     def start(self, device=None, demo=False, engine="dsp"):
         if engine not in ("dsp", "model"):
@@ -36,6 +38,7 @@ class Session:
                 raise ValueError("监听仍在运行或停止中，请稍后重试")
             self.stop_event.clear()
             self.events.clear()
+            self.score.reset()
             self.latest, self.error, self.dropped = None, None, 0
             self.sequence += 1
             self.engine = engine
@@ -61,6 +64,7 @@ class Session:
                 dropped=self.dropped,
                 session=self.sequence,
                 engine=self.engine,
+                score_revision=self.score.revision,
             )
 
     def _publish(self, event):
@@ -71,6 +75,7 @@ class Session:
             if not self.events or self.events[-1]["chord"] != event.chord:
                 self.events.append(item)
             self.latest = item
+            self.score.add(item)
 
     def _run(self, device, demo, engine):
         try:
@@ -111,6 +116,7 @@ class Session:
                             self.dropped = capture.dropped
             with self.lock:
                 self.status = "stopped"
+                self.score.analyze()
         except Exception as exc:
             with self.lock:
                 self.status, self.error = "error", str(exc)
@@ -146,8 +152,17 @@ def make_handler(session):
                     files("chordotomy").joinpath("live.html").read_text("utf-8"),
                     content_type="text/html; charset=utf-8",
                 )
+            if path == "/score.js":
+                return self.send(
+                    files("chordotomy").joinpath("score.js").read_text("utf-8"),
+                    content_type="text/javascript; charset=utf-8",
+                )
             if path == "/api/state":
                 return self.send(session.snapshot())
+            if path == "/api/score":
+                with session.lock:
+                    score = session.score.snapshot()
+                return self.send(score)
             if path == "/api/devices":
                 try:
                     return self.send({"devices": speakers()})
@@ -172,6 +187,20 @@ def make_handler(session):
                     ) is not bool:
                         raise ValueError("Invalid device or demo")
                     session.start(device, demo, body.get("engine", "dsp"))
+                elif self.path in ("/api/score/config", "/api/score/edit", "/api/score/analyze"):
+                    with session.lock:
+                        if self.path == "/api/score/config":
+                            session.score.configure(body)
+                        elif self.path == "/api/score/edit":
+                            session.score.edit(
+                                body.get("beat"), body.get("chord", ""), body.get("reset", False)
+                            )
+                        elif session.thread and session.thread.is_alive():
+                            raise ValueError("请先停止监听再补全和声分析")
+                        if not session.thread or not session.thread.is_alive():
+                            session.score.analyze()
+                        score = session.score.snapshot()
+                    return self.send(score)
                 elif self.path == "/api/stop":
                     session.stop()
                 else:
