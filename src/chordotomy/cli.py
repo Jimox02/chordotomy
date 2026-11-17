@@ -18,6 +18,7 @@ import typer
 from . import __version__, beats, harmony, model, timeline
 from . import evaluate as evaluation
 from .features import NoBeatsError
+from .live_cli import devices, listen
 from .stagecache import StageCache
 
 
@@ -34,6 +35,8 @@ class Engine(StrEnum):
 
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+app.command("audio-devices")(devices)
+app.command("listen")(listen)
 
 
 def _print_version(value: bool) -> None:
