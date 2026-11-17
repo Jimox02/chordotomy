@@ -11,7 +11,7 @@ from typing import Annotated
 import soundfile as sf
 import typer
 
-from .realtime import BLOCK, RATE, Capture, Detector, Timeline, speakers
+from .realtime import BLOCK, RATE, Capture, Timeline, make_detector, speakers
 
 
 def devices():
@@ -32,9 +32,12 @@ def listen(
     duration: Annotated[
         float | None, typer.Option(min=0.1, help="Stop after audio seconds.")
     ] = None,
+    engine: Annotated[str, typer.Option(help="dsp or model (lv-chordia).")] = "dsp",
     fast: Annotated[bool, typer.Option(help="File replay without pacing (testing).")] = False,
 ):
     """Preview live chords. Ctrl+C stops; advanced harmony is deferred to offline analysis."""
+    if engine not in ("dsp", "model"):
+        raise typer.BadParameter("engine must be dsp or model")
     if device and input:
         raise typer.BadParameter("--device and --input are mutually exclusive")
     if fast and not input:
@@ -61,11 +64,18 @@ def listen(
                         start += len(data)
 
                 source = replay()
+                detector = make_detector(engine, rate)
             else:
-                capture = stack.enter_context(Capture(device))
-                rate, source = RATE, capture.blocks()
-            detector, history = Detector(rate=rate), Timeline()
-            typer.echo("Live DSP preview; no key/function conclusions. Ctrl+C to stop.", err=True)
+                typer.echo(f"Loading {engine} engine…", err=True)
+                detector = make_detector(engine)
+                capture = stack.enter_context(
+                    Capture(device, queue_blocks=100 if engine == "model" else 10)
+                )
+                rate, source = RATE, capture.blocks(coalesce=engine == "model")
+            history = Timeline()
+            typer.echo(
+                f"Live {engine} preview; no key/function conclusions. Ctrl+C to stop.", err=True
+            )
             try:
                 for start, data in source:
                     if duration is not None:

@@ -232,3 +232,59 @@ def test_speaker_enumeration_has_own_com_scope(monkeypatch):
     monkeypatch.setattr(live, "soundcard_backend", backend)
     assert live.speakers() == [{"id": "x", "name": "output"}]
     assert calls == ["init", "close"]
+
+
+def test_model_window_cadence_and_cache(monkeypatch):
+    import chordotomy.realtime as live
+    from chordotomy import model
+    from chordotomy.chords import LABELS
+    from chordotomy.realtime import make_detector
+
+    monkeypatch.setattr(live, "_configure_live_cpu", lambda: None)
+
+    calls = []
+    monkeypatch.setattr(model, "available", lambda: True)
+    monkeypatch.setattr(model, "_networks", lambda: calls.append("load"))
+
+    def recognize(audio):
+        calls.append(len(audio))
+        index = LABELS.index("C:maj")
+        states = np.full(173, index)
+        scores = np.full((len(LABELS), 173), -20.0)
+        scores[index] = 0
+        return states, scores, None
+
+    monkeypatch.setattr(model, "recognize", recognize)
+    detector = make_detector("model", RATE)
+    events = stream(detector, tone([60, 64, 67], seconds=6))
+    assert len(events) == 3  # At 4, 5 and 6 seconds, not on every capture block.
+    assert events[-1].chord == "C:maj"
+    assert events[-1].engine == "model"
+    assert calls.count("load") == 1
+    assert all(c == 88200 for c in calls[1:])
+
+
+def test_missing_model_fails_without_dsp_fallback(monkeypatch):
+    from chordotomy import model
+    from chordotomy.realtime import make_detector
+
+    monkeypatch.setattr(model, "available", lambda: False)
+    with pytest.raises(RuntimeError, match="uv sync"):
+        make_detector("model")
+    with pytest.raises(ValueError, match="engine"):
+        make_detector("unknown")
+
+
+def test_capture_coalescing_keeps_latest_contiguous_run():
+    from queue import Queue
+
+    from chordotomy.realtime import coalesce_blocks
+
+    queue = Queue()
+    queue.put((2, np.ones((2, 2))))
+    queue.put((8, np.full((2, 2), 2)))  # A dropped block: only this new run survives.
+    queue.put((10, np.full((2, 2), 3)))
+    start, audio = coalesce_blocks(queue, (0, np.zeros((2, 2))))
+    assert start == 8
+    assert audio.shape == (4, 2)
+    assert list(audio[:, 0]) == [2, 2, 3, 3]

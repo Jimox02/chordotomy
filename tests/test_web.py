@@ -75,10 +75,30 @@ def test_invalid_request_and_capture_error(server, monkeypatch):
     assert request(http, "POST", "/api/start", {"demo": "yes"})[0] == 400
     assert request(http, "GET", "/missing")[0] == 404
     monkeypatch.setattr(
-        web, "Capture", lambda *_: (_ for _ in ()).throw(RuntimeError("device error"))
+        web, "Capture", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("device error"))
     )
     assert request(http, "POST", "/api/start", {})[0] == 200
     session.thread.join(2)
     state = session.snapshot()
     assert state["status"] == "error"
     assert "device error" in state["error"]
+
+
+def test_web_engine_selection_validation(server, monkeypatch):
+    import chordotomy.web as web
+
+    http, session = server
+    requested = []
+
+    def detector(engine):
+        requested.append(engine)
+        raise RuntimeError("model missing")
+
+    monkeypatch.setattr(web, "make_detector", detector)
+    assert request(http, "POST", "/api/start", {"engine": "invalid"})[0] == 400
+    assert session.thread is None
+    assert request(http, "POST", "/api/start", {"engine": "model"})[0] == 200
+    session.thread.join(2)
+    assert requested == ["model"]
+    assert session.snapshot()["engine"] == "model"
+    assert session.snapshot()["error"] == "model missing"

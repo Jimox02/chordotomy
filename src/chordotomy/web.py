@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 import numpy as np
 
-from .realtime import BLOCK, RATE, Capture, Detector, speakers
+from .realtime import BLOCK, RATE, Capture, coalesce_blocks, make_detector, speakers
 
 
 class Session:
@@ -26,8 +26,11 @@ class Session:
         self.latest = None
         self.dropped = 0
         self.sequence = 0
+        self.engine = "dsp"
 
-    def start(self, device=None, demo=False):
+    def start(self, device=None, demo=False, engine="dsp"):
+        if engine not in ("dsp", "model"):
+            raise ValueError("engine must be dsp or model")
         with self.lock:
             if self.thread and self.thread.is_alive():
                 raise ValueError("监听仍在运行或停止中，请稍后重试")
@@ -35,8 +38,11 @@ class Session:
             self.events.clear()
             self.latest, self.error, self.dropped = None, None, 0
             self.sequence += 1
+            self.engine = engine
             self.status = "starting"
-            self.thread = threading.Thread(target=self._run, args=(device, demo), daemon=True)
+            self.thread = threading.Thread(
+                target=self._run, args=(device, demo, engine), daemon=True
+            )
             self.thread.start()
 
     def stop(self):
@@ -54,6 +60,7 @@ class Session:
                 history=list(self.events),
                 dropped=self.dropped,
                 session=self.sequence,
+                engine=self.engine,
             )
 
     def _publish(self, event):
@@ -65,9 +72,9 @@ class Session:
                 self.events.append(item)
             self.latest = item
 
-    def _run(self, device, demo):
+    def _run(self, device, demo, engine):
         try:
-            detector = Detector()
+            detector = make_detector(engine)
             if demo:
                 with self.lock:
                     self.status = "demo"
@@ -77,13 +84,17 @@ class Session:
                     chord = notes[(start // (RATE * 3)) % len(notes)]
                     t = (np.arange(BLOCK) + start) / RATE
                     audio = sum(
-                        0.12 * np.sin(2 * np.pi * 440 * 2 ** ((n - 69) / 12) * t) for n in chord
+                        0.04 * np.sin(2 * np.pi * 440 * 2 ** ((n - 69) / 12) * h * t) / h
+                        for n in (*chord, chord[0] - 24)
+                        for h in range(1, 5)
                     )
+                    phase = t % 0.5
+                    audio *= np.minimum(phase / 0.005, 1) * np.exp(-phase / 0.25)
                     self._publish(detector.feed(audio, start))
                     start += BLOCK
                     self.stop_event.wait(BLOCK / RATE)
             else:
-                with Capture(device) as capture:
+                with Capture(device, queue_blocks=100 if engine == "model" else 10) as capture:
                     with self.lock:
                         self.status = "listening"
                     while not self.stop_event.is_set():
@@ -93,6 +104,8 @@ class Session:
                             start, audio = capture.queue.get(timeout=0.25)
                         except Empty:
                             continue
+                        if engine == "model":
+                            start, audio = coalesce_blocks(capture.queue, (start, audio))
                         self._publish(detector.feed(audio, start))
                         with self.lock:
                             self.dropped = capture.dropped
@@ -158,7 +171,7 @@ def make_handler(session):
                         demo
                     ) is not bool:
                         raise ValueError("Invalid device or demo")
-                    session.start(device, demo)
+                    session.start(device, demo, body.get("engine", "dsp"))
                 elif self.path == "/api/stop":
                     session.stop()
                 else:
