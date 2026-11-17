@@ -50,6 +50,7 @@ Documentation = "https://github.com/zeikar/chordotomy/blob/main/docs/ARCHITECTUR
 chordotomy = "chordotomy.cli:app"
 
 [project.optional-dependencies]
+live = ["soundcard>=0.4.5,<0.5; sys_platform == 'win32'"]
 dev = [
   "pytest>=8.0",
   "ruff>=0.5",

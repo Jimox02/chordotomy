@@ -27,6 +27,11 @@ Everything runs locally. Your audio never leaves your machine.
 - **A viewer** that plays the recording with its chords, plays the chords themselves to check them by ear, and lets you correct and enter chords.
 - **An agent skill** for Claude Code, Codex, Cursor and other agents, `extract-chords`, that writes out the chords of a recording or a YouTube link and explains the highlighted moves.
 
+## Windows 实时和弦预览
+
+新增 `chordotomy listen`，监听系统播放声音并输出和弦时间线。
+安装、命令和限制见 [实时预览文档](docs/realtime.md)。高级和声分析留待结束后处理。
+
 ## Quick start
 
 ```sh
