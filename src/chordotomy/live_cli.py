@@ -90,3 +90,16 @@ def listen(
     except Exception as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
+
+
+def web(
+    port: Annotated[int, typer.Option(min=1024, max=65535)] = 8765,
+):
+    """Open the local live-chord dashboard at http://127.0.0.1:8765."""
+    from .web import serve
+
+    try:
+        serve(port)
+    except OSError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
