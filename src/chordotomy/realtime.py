@@ -159,8 +159,11 @@ def com_apartment():
 
 
 def speakers():
+    # SoundCard initializes COM during its first import and rejects S_FALSE.
+    # Import before entering our own scope; reused request threads still need the scope.
+    sc = soundcard_backend()
     with com_apartment():
-        return [{"id": s.id, "name": s.name} for s in soundcard_backend().all_speakers()]
+        return [{"id": s.id, "name": s.name} for s in sc.all_speakers()]
 
 
 class Capture:
@@ -178,8 +181,9 @@ class Capture:
     def _run(self):
         apartment = ExitStack()
         try:
-            apartment.enter_context(com_apartment())
+            # Let SoundCard perform its first-import initialization before our balanced call.
             sc = soundcard_backend()
+            apartment.enter_context(com_apartment())
             speaker = sc.get_speaker(self.device) if self.device else sc.default_speaker()
             if speaker is None:
                 raise RuntimeError("no playback device found")

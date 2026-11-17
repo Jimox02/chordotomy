@@ -171,7 +171,7 @@ def test_failed_com_does_not_uninitialize(monkeypatch):
     assert calls == []
 
 
-def test_capture_initializes_com_on_worker_before_backend(monkeypatch):
+def test_capture_imports_backend_before_com_and_initializes_before_device(monkeypatch):
     from contextlib import contextmanager
 
     import chordotomy.realtime as live
@@ -188,7 +188,12 @@ def test_capture_initializes_com_on_worker_before_backend(monkeypatch):
 
     def backend():
         calls.append(("backend", threading.get_ident()))
-        raise RuntimeError("device unavailable")
+
+        def device():
+            calls.append(("device", threading.get_ident()))
+            raise RuntimeError("device unavailable")
+
+        return SimpleNamespace(default_speaker=device)
 
     monkeypatch.setattr(live, "com_apartment", apartment)
     monkeypatch.setattr(live, "soundcard_backend", backend)
@@ -196,7 +201,7 @@ def test_capture_initializes_com_on_worker_before_backend(monkeypatch):
     with pytest.raises(RuntimeError, match="device unavailable"):
         capture.__enter__()
     capture.thread.join(2)
-    assert [c[0] for c in calls] == ["init", "backend", "close"]
+    assert [c[0] for c in calls] == ["backend", "init", "device", "close"]
     assert len({c[1] for c in calls}) == 1
     assert calls[0][1] != threading.get_ident()
 
@@ -215,8 +220,13 @@ def test_speaker_enumeration_has_own_com_scope(monkeypatch):
         calls.append("close")
 
     def backend():
-        assert calls == ["init"]
-        return SimpleNamespace(all_speakers=lambda: [SimpleNamespace(id="x", name="output")])
+        assert calls == []  # A first import must not see our pre-initialized apartment.
+
+        def all_speakers():
+            assert calls == ["init"]
+            return [SimpleNamespace(id="x", name="output")]
+
+        return SimpleNamespace(all_speakers=all_speakers)
 
     monkeypatch.setattr(live, "com_apartment", apartment)
     monkeypatch.setattr(live, "soundcard_backend", backend)
