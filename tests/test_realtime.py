@@ -131,3 +131,94 @@ def test_duration_limits_audio_timestamps(tmp_path):
     assert result.exit_code == 0
     rows = [json.loads(line) for line in result.output.splitlines() if line.startswith("{")]
     assert rows[-1]["end_time"] == 1.25
+
+
+@pytest.mark.parametrize("result", [0, 1])
+def test_com_init_balanced_on_exception(monkeypatch, result):
+    import chordotomy.realtime as live
+
+    calls = []
+    monkeypatch.setattr(live, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(
+        live,
+        "_ole32",
+        lambda: SimpleNamespace(
+            CoInitializeEx=lambda *args: calls.append(("init", threading.get_ident())) or result,
+            CoUninitialize=lambda: calls.append(("close", threading.get_ident())),
+        ),
+    )
+    with pytest.raises(ValueError), live.com_apartment():
+        raise ValueError("test")
+    assert [c[0] for c in calls] == ["init", "close"]
+    assert calls[0][1] == calls[1][1]
+
+
+def test_failed_com_does_not_uninitialize(monkeypatch):
+    import chordotomy.realtime as live
+
+    calls = []
+    monkeypatch.setattr(live, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(
+        live,
+        "_ole32",
+        lambda: SimpleNamespace(
+            CoInitializeEx=lambda *args: -2147417850,
+            CoUninitialize=lambda: calls.append("close"),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="80010106"), live.com_apartment():
+        pytest.fail("failed initialization must not enter")
+    assert calls == []
+
+
+def test_capture_initializes_com_on_worker_before_backend(monkeypatch):
+    from contextlib import contextmanager
+
+    import chordotomy.realtime as live
+
+    calls = []
+
+    @contextmanager
+    def apartment():
+        calls.append(("init", threading.get_ident()))
+        try:
+            yield
+        finally:
+            calls.append(("close", threading.get_ident()))
+
+    def backend():
+        calls.append(("backend", threading.get_ident()))
+        raise RuntimeError("device unavailable")
+
+    monkeypatch.setattr(live, "com_apartment", apartment)
+    monkeypatch.setattr(live, "soundcard_backend", backend)
+    capture = Capture()
+    with pytest.raises(RuntimeError, match="device unavailable"):
+        capture.__enter__()
+    capture.thread.join(2)
+    assert [c[0] for c in calls] == ["init", "backend", "close"]
+    assert len({c[1] for c in calls}) == 1
+    assert calls[0][1] != threading.get_ident()
+
+
+def test_speaker_enumeration_has_own_com_scope(monkeypatch):
+    from contextlib import contextmanager
+
+    import chordotomy.realtime as live
+
+    calls = []
+
+    @contextmanager
+    def apartment():
+        calls.append("init")
+        yield
+        calls.append("close")
+
+    def backend():
+        assert calls == ["init"]
+        return SimpleNamespace(all_speakers=lambda: [SimpleNamespace(id="x", name="output")])
+
+    monkeypatch.setattr(live, "com_apartment", apartment)
+    monkeypatch.setattr(live, "soundcard_backend", backend)
+    assert live.speakers() == [{"id": "x", "name": "output"}]
+    assert calls == ["init", "close"]

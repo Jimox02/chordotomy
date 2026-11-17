@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import threading
 from collections import deque
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass
 from queue import Empty, Full, Queue
 
@@ -128,8 +129,38 @@ def soundcard_backend():
     return soundcard
 
 
+def _ole32():
+    import ctypes
+
+    dll = ctypes.WinDLL("ole32")
+    dll.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    dll.CoInitializeEx.restype = ctypes.c_long
+    dll.CoUninitialize.argtypes = []
+    dll.CoUninitialize.restype = None
+    return dll
+
+
+@contextmanager
+def com_apartment():
+    """COM belongs to the calling thread, not to the imported SoundCard module."""
+    if sys.platform != "win32":
+        yield
+        return
+    ole = _ole32()
+    # MTA, matching SoundCard's non-main-thread initialization.
+    result = ole.CoInitializeEx(None, 0)
+    if result not in (0, 1):
+        raise RuntimeError(f"COM initialization failed: 0x{result & 0xFFFFFFFF:08x}")
+    try:
+        yield
+    finally:
+        # S_FALSE is successful too and increments the per-thread COM reference count.
+        ole.CoUninitialize()
+
+
 def speakers():
-    return [{"id": s.id, "name": s.name} for s in soundcard_backend().all_speakers()]
+    with com_apartment():
+        return [{"id": s.id, "name": s.name} for s in soundcard_backend().all_speakers()]
 
 
 class Capture:
@@ -145,7 +176,9 @@ class Capture:
         self.thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
+        apartment = ExitStack()
         try:
+            apartment.enter_context(com_apartment())
             sc = soundcard_backend()
             speaker = sc.get_speaker(self.device) if self.device else sc.default_speaker()
             if speaker is None:
@@ -171,6 +204,7 @@ class Capture:
         except Exception as exc:
             self.error = exc
         finally:
+            apartment.close()
             self.ready.set()
 
     def __enter__(self):
